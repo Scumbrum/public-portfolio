@@ -44,11 +44,31 @@ function round(value, digits) {
   return Math.round(value * factor) / factor;
 }
 
+function actionDate(action) {
+  const raw = String(action.date || action.at || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : new Date().toISOString().slice(0, 10);
+}
+
+function sortedActions(actions) {
+  return [...actions].sort((a, b) => actionDate(a).localeCompare(actionDate(b)) || 0);
+}
+
+function earliestActionDate(actions) {
+  const dates = actions.map(actionDate).sort();
+  return dates[0] || null;
+}
+
 function historyStart() {
   const start = new Date();
   start.setFullYear(start.getFullYear() - 1);
   start.setDate(start.getDate() - 7);
   start.setHours(0, 0, 0, 0);
+  const inception = earliestActionDate(ACTIONS);
+  if (inception) {
+    const first = new Date(`${inception}T00:00:00`);
+    first.setDate(first.getDate() - 7);
+    if (first < start) return first;
+  }
   return start;
 }
 
@@ -97,9 +117,25 @@ async function fetchChart(ticker) {
   throw lastError ?? new Error(`Failed to load ${ticker}`);
 }
 
+function dayReturn(bmv, emv, cf) {
+  if (bmv > 1e-6) return (emv - bmv - cf) / bmv;
+  if (cf > 1e-6) return (emv - cf) / cf;
+  return 0;
+}
+
+function linkedTwr(points) {
+  if (!points.length) return null;
+  let growth = 1;
+  for (const point of points) {
+    if (!Number.isFinite(point.r)) continue;
+    growth *= 1 + point.r;
+  }
+  return (growth - 1) * 100;
+}
+
 function holdingsFromActions(actions) {
   const grouped = new Map();
-  for (const action of actions) {
+  for (const action of sortedActions(actions)) {
     const ticker = String(action.asset ?? action.ticker ?? '').trim().toUpperCase();
     const amount = Number(action.amount);
     const price = Number(action.price);
@@ -119,32 +155,78 @@ function holdingsFromActions(actions) {
   return [...grouped.values()].filter((holding) => holding.amount > 0);
 }
 
-function buildHistory(assets, charts) {
+function buildHistory(actions, charts) {
+  const ordered = sortedActions(actions);
+  const inception = earliestActionDate(ordered);
   const maps = {};
   const dates = new Set();
-  for (const asset of assets) {
-    const ticker = String(asset.ticker).toUpperCase();
+  for (const action of ordered) {
+    const ticker = String(action.asset ?? action.ticker ?? '').trim().toUpperCase();
+    if (!ticker || maps[ticker]) continue;
     const rows = charts[ticker]?.history ?? [];
     maps[ticker] = new Map(rows.map((row) => [row.date, row.close]));
-    for (const row of rows) dates.add(row.date);
+    for (const row of rows) {
+      if (!inception || row.date >= inception) dates.add(row.date);
+    }
   }
 
-  const last = {};
+  const pending = ordered.map((action) => ({
+    date: actionDate(action),
+    ticker: String(action.asset ?? action.ticker ?? '').trim().toUpperCase(),
+    side: String(action.side ?? 'BUY').toUpperCase(),
+    amount: Number(action.amount),
+    price: Number(action.price),
+  })).filter((action) => action.ticker && action.amount > 0 && action.price > 0);
+
+  const shares = {};
+  const lastClose = {};
+  let bmv = 0;
   const points = [];
   for (const date of [...dates].sort()) {
-    let value = 0;
+    const due = [];
+    while (pending.length && pending[0].date <= date) due.push(pending.shift());
+
+    const nextShares = { ...shares };
+    let cf = 0;
+    for (const action of due) {
+      const notional = action.amount * action.price;
+      if (action.side === 'SELL') {
+        nextShares[action.ticker] = (nextShares[action.ticker] || 0) - action.amount;
+        cf -= notional;
+      } else {
+        nextShares[action.ticker] = (nextShares[action.ticker] || 0) + action.amount;
+        cf += notional;
+      }
+    }
+
+    const pricedClose = { ...lastClose };
+    let emv = 0;
     let complete = true;
-    for (const asset of assets) {
-      const ticker = String(asset.ticker).toUpperCase();
-      const close = maps[ticker].get(date);
-      if (close != null) last[ticker] = close;
-      if (last[ticker] == null) {
+    for (const [ticker, amount] of Object.entries(nextShares)) {
+      if (amount <= 1e-8) continue;
+      const close = maps[ticker]?.get(date);
+      if (close != null) pricedClose[ticker] = close;
+      if (pricedClose[ticker] == null) {
         complete = false;
         break;
       }
-      value += asset.amount * last[ticker];
+      emv += amount * pricedClose[ticker];
     }
-    if (complete) points.push({ date, value: round(value, 2) });
+    if (!complete) {
+      pending.unshift(...due);
+      continue;
+    }
+    if (emv <= 0 && cf === 0) continue;
+    Object.assign(shares, nextShares);
+    Object.assign(lastClose, pricedClose);
+    points.push({
+      date,
+      value: round(emv, 2),
+      bmv,
+      cf,
+      r: dayReturn(bmv, emv, cf),
+    });
+    bmv = emv;
   }
   return points;
 }
@@ -175,6 +257,8 @@ function buildSnapshot(actions, charts, errors) {
   const value = priced.reduce((sum, position) => sum + position.value, 0);
   const cost = priced.reduce((sum, position) => sum + position.cost, 0);
   const returnAbs = value - cost;
+  const history = buildHistory(actions, charts);
+  const twr = linkedTwr(history);
 
   return {
     goal: GOAL,
@@ -184,17 +268,19 @@ function buildSnapshot(actions, charts, errors) {
       value: round(value, 2),
       cost: round(cost, 2),
       returnAbs: round(returnAbs, 2),
-      returnPct: cost === 0 ? null : round((returnAbs / cost) * 100, 2),
+      twr: twr == null ? null : round(twr, 2),
     },
-    history: buildHistory(assets, charts),
-    actions,
+    history,
+    inception: earliestActionDate(actions),
+    actions: sortedActions(actions),
   };
 }
 
 function sliceHistory() {
-  const start = periodStart(period);
-  const rows = (snapshot?.history ?? []).filter((row) => row.date >= start);
-  return rows.length ? rows : (snapshot?.history ?? []).slice(-2);
+  const requested = periodStart(period);
+  const floor = snapshot?.inception;
+  const start = floor && requested < floor ? floor : requested;
+  return (snapshot?.history ?? []).filter((row) => row.date >= start);
 }
 
 function renderStats() {
@@ -208,13 +294,13 @@ function renderStats() {
     return;
   }
   amount.textContent = money(totals.value);
-  if (totals.returnPct == null) {
-    ret.textContent = '—';
-    ret.className = '';
+  if (totals.twr == null) {
+    ret.textContent = signedMoney(totals.returnAbs);
+    ret.className = totals.returnAbs >= 0 ? 'up' : 'down';
     return;
   }
-  ret.textContent = `${signedMoney(totals.returnAbs)} (${pct(totals.returnPct)})`;
-  ret.className = totals.returnAbs >= 0 ? 'up' : 'down';
+  ret.textContent = `${signedMoney(totals.returnAbs)} (${pct(totals.twr)})`;
+  ret.className = totals.twr >= 0 ? 'up' : 'down';
 }
 
 function renderWindow() {
@@ -224,14 +310,11 @@ function renderWindow() {
     label.className = 'muted';
     return;
   }
-  const first = series[0].value;
-  const last = series[series.length - 1].value;
-  const change = last - first;
-  const changePct = first === 0 ? null : (change / first) * 100;
-  label.textContent = changePct == null
-    ? signedMoney(change)
-    : `${signedMoney(change)} (${pct(changePct)})`;
-  label.className = change >= 0 ? 'up' : 'down';
+  const twr = linkedTwr(series);
+  const cash = series.reduce((sum, point) => sum + point.cf, 0);
+  const gain = series.at(-1).value - series[0].bmv - cash;
+  label.textContent = twr == null ? signedMoney(gain) : `${signedMoney(gain)} (${pct(twr)})`;
+  label.className = (twr ?? gain) >= 0 ? 'up' : 'down';
 }
 
 function renderPositions() {
