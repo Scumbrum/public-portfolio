@@ -14,6 +14,7 @@ const GRID = 'rgba(196, 181, 253, 0.12)';
 
 let snapshot = null;
 let period = '1y';
+let view = 'value';
 let series = [];
 let hoverIndex = null;
 let layout = null;
@@ -280,7 +281,34 @@ function sliceHistory() {
   const requested = periodStart(period);
   const floor = snapshot?.inception;
   const start = floor && requested < floor ? floor : requested;
-  return (snapshot?.history ?? []).filter((row) => row.date >= start);
+  const rows = (snapshot?.history ?? []).filter((row) => row.date >= start);
+  if (view !== 'twr') return rows.map((row) => ({ ...row, plot: row.value }));
+  let growth = 1;
+  return rows.map((row) => {
+    growth *= 1 + (Number.isFinite(row.r) ? row.r : 0);
+    return { ...row, plot: (growth - 1) * 100 };
+  });
+}
+
+function niceStep(minStep) {
+  if (!(minStep > 0) || !Number.isFinite(minStep)) return 1;
+  const power = 10 ** Math.floor(Math.log10(minStep));
+  const mantissa = minStep / power;
+  const factor = mantissa <= 1 ? 1 : mantissa <= 2 ? 2 : mantissa <= 5 ? 5 : 10;
+  return factor * power;
+}
+
+function formatAxis(value, step) {
+  if (view === 'twr') {
+    const digits = step < 1 ? 1 : 0;
+    const sign = value > 0 ? '+' : '';
+    return `${sign}${value.toFixed(digits)}%`;
+  }
+  if (step >= 1 && Math.abs(value - Math.round(value)) < 1e-6) {
+    const sign = value < 0 ? '-' : '';
+    return `${sign}$${Math.abs(Math.round(value)).toLocaleString('en-US')}`;
+  }
+  return money(value);
 }
 
 function renderStats() {
@@ -344,7 +372,7 @@ function assetLabel(action) {
 
 function renderActions() {
   const list = document.getElementById('action-list');
-  const actions = snapshot?.actions ?? [];
+  const actions = [...(snapshot?.actions ?? [])].sort((a, b) => actionDate(b).localeCompare(actionDate(a)));
   if (!actions.length) {
     list.innerHTML = '<li class="empty">No actions in data.js.</li>';
     return;
@@ -402,17 +430,31 @@ function applySnapshot(next) {
 
 function buildLayout(cssW, cssH) {
   const pad = { top: 24, right: 24, bottom: 36, left: 72 };
-  const w = cssW - pad.left - pad.right;
   const h = cssH - pad.top - pad.bottom;
-  const values = series.map((row) => row.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min || Math.max(Math.abs(max) * 0.08, 1);
-  const minVal = min - span * 0.12;
-  const maxVal = max + span * 0.12;
+  const values = series.map((row) => row.plot);
+  const dataMin = Math.min(...values);
+  const dataMax = Math.max(...values);
+  const span = dataMax - dataMin || Math.max(Math.abs(dataMax) * 0.08, 1);
+  const roughMin = dataMin - span * 0.12;
+  const roughMax = dataMax + span * 0.12;
+  const maxTicks = Math.max(2, Math.floor(h / 46));
+  const step = niceStep((roughMax - roughMin) / maxTicks);
+  const minVal = Math.floor(roughMin / step) * step;
+  const maxVal = Math.ceil(roughMax / step) * step;
+  const safeMax = maxVal === minVal ? minVal + step : maxVal;
+  const tickCount = Math.round((safeMax - minVal) / step);
+  const ticks = [];
+  for (let i = 0; i <= tickCount; i++) {
+    const value = minVal + step * i;
+    ticks.push(Math.abs(value) < step * 1e-6 ? 0 : value);
+  }
+  ctx.font = '12px Segoe UI, system-ui, sans-serif';
+  const widest = Math.max(...ticks.map((value) => ctx.measureText(formatAxis(value, step)).width));
+  pad.left = Math.ceil(widest + 16);
+  const w = cssW - pad.left - pad.right;
   const xAt = (i) => pad.left + (w / Math.max(series.length - 1, 1)) * i;
-  const yAt = (value) => pad.top + h - ((value - minVal) / (maxVal - minVal)) * h;
-  return { pad, w, h, minVal, maxVal, xAt, yAt, cssW, cssH };
+  const yAt = (value) => pad.top + h - ((value - minVal) / (safeMax - minVal)) * h;
+  return { pad, w, h, minVal, maxVal: safeMax, step, ticks, xAt, yAt, cssW, cssH };
 }
 
 function draw() {
@@ -433,14 +475,13 @@ function draw() {
     return;
   }
 
-  layout = buildLayout(cssW, cssH);
-  const { pad, w, h, minVal, maxVal, xAt, yAt } = layout;
-
   ctx.font = '12px Segoe UI, system-ui, sans-serif';
+  layout = buildLayout(cssW, cssH);
+  const { pad, w, h, xAt, yAt, step, ticks } = layout;
+
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
-  for (let i = 0; i <= 4; i++) {
-    const value = minVal + ((maxVal - minVal) / 4) * i;
+  ticks.forEach((value) => {
     const y = yAt(value);
     ctx.strokeStyle = GRID;
     ctx.lineWidth = 1;
@@ -449,13 +490,13 @@ function draw() {
     ctx.lineTo(pad.left + w, y);
     ctx.stroke();
     ctx.fillStyle = AXIS;
-    ctx.fillText(money(value), pad.left - 10, y);
-  }
+    ctx.fillText(formatAxis(value, step), pad.left - 10, y);
+  });
 
   ctx.textBaseline = 'top';
-  const ticks = Math.min(cssW < 520 ? 2 : cssW < 760 ? 3 : 5, series.length);
-  for (let i = 0; i < ticks; i++) {
-    const index = Math.round((i / (ticks - 1 || 1)) * (series.length - 1));
+  const xTicks = Math.min(cssW < 520 ? 2 : cssW < 760 ? 3 : 5, series.length);
+  for (let i = 0; i < xTicks; i++) {
+    const index = Math.round((i / (xTicks - 1 || 1)) * (series.length - 1));
     const label = fmtDate(series[index].date);
     const x = xAt(index);
     const labelWidth = ctx.measureText(label).width;
@@ -479,7 +520,7 @@ function draw() {
   ctx.beginPath();
   series.forEach((row, i) => {
     const x = xAt(i);
-    const y = yAt(row.value);
+    const y = yAt(row.plot);
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
@@ -492,7 +533,7 @@ function draw() {
   ctx.beginPath();
   series.forEach((row, i) => {
     const x = xAt(i);
-    const y = yAt(row.value);
+    const y = yAt(row.plot);
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
@@ -503,7 +544,7 @@ function draw() {
 
   if (hoverIndex != null && series[hoverIndex]) {
     const x = xAt(hoverIndex);
-    const y = yAt(series[hoverIndex].value);
+    const y = yAt(series[hoverIndex].plot);
     ctx.strokeStyle = 'rgba(245, 243, 255, 0.35)';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -541,7 +582,8 @@ function moveTooltip(event) {
   draw();
   const row = series[nearest];
   tooltip.hidden = false;
-  tooltip.innerHTML = `<strong>${fmtDate(row.date)}</strong><br>${money(row.value)}`;
+  const point = view === 'twr' ? pct(row.plot) : money(row.value);
+  tooltip.innerHTML = `<strong>${fmtDate(row.date)}</strong><br>${point}`;
   placeTooltip(event, nearest);
 }
 
@@ -561,6 +603,20 @@ canvas.addEventListener('mouseleave', () => {
   draw();
 });
 window.addEventListener('resize', draw);
+
+document.querySelectorAll('.views button').forEach((button) => {
+  button.addEventListener('click', () => {
+    view = button.dataset.view;
+    document.querySelectorAll('.views button').forEach((item) => {
+      item.classList.toggle('active', item === button);
+    });
+    document.getElementById('chart-title').textContent = view === 'twr' ? 'Return' : 'History';
+    series = sliceHistory();
+    hoverIndex = null;
+    tooltip.hidden = true;
+    draw();
+  });
+});
 
 document.querySelectorAll('.periods button').forEach((button) => {
   button.addEventListener('click', () => {

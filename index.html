@@ -27,7 +27,13 @@
 
     <section class="card" aria-labelledby="chart-title">
       <div class="card-head">
-        <h2 id="chart-title">History</h2>
+        <div class="head-title">
+          <h2 id="chart-title">History</h2>
+          <div class="views" role="group" aria-label="Chart view">
+            <button type="button" data-view="value" class="active">Value</button>
+            <button type="button" data-view="twr">Return</button>
+          </div>
+        </div>
         <p id="window-return" class="muted">Loading prices…</p>
       </div>
       <p id="banner" class="banner" hidden></p>
