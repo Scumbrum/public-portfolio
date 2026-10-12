@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Invest Portfolio</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Invest Portfolio</h1>
+      </div>
+      <div class="stats" id="stats">
+        <article class="stat">
+          <span class="label">Total amount</span>
+          <strong id="total-amount">—</strong>
+        </article>
+        <article class="stat">
+          <span class="label">Total return</span>
+          <strong id="total-return">—</strong>
+        </article>
+      </div>
+    </header>
+
+    <section class="card" aria-labelledby="chart-title">
+      <div class="card-head">
+        <h2 id="chart-title">History</h2>
+        <p id="window-return" class="muted">Loading prices…</p>
+      </div>
+      <p id="banner" class="banner" hidden></p>
+      <div class="chart-wrap">
+        <canvas id="chart" width="960" height="420"></canvas>
+        <div id="tooltip" class="tooltip" hidden></div>
+      </div>
+      <div class="periods" role="group" aria-label="Chart period">
+        <button type="button" data-period="7d">7d</button>
+        <button type="button" data-period="1m">1 month</button>
+        <button type="button" data-period="1y" class="active">1 year</button>
+        <button type="button" data-period="ytd">YTD</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Ticker</th>
+              <th>Amount</th>
+              <th>Avg cost</th>
+              <th>Price</th>
+              <th>Value</th>
+            </tr>
+          </thead>
+          <tbody id="positions"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <details class="accordion">
+      <summary>Actions</summary>
+      <div class="panel">
+        <ol id="action-list" class="action-list"></ol>
+      </div>
+    </details>
+
+    <section class="card progress" aria-labelledby="progress-title">
+      <div class="card-head">
+        <h2 id="progress-title">Progress</h2>
+        <p id="progress-label" class="muted">— of 10,000</p>
+      </div>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="10000" aria-valuenow="0">
+        <div id="progress-fill" class="fill"></div>
+      </div>
+      <img
+        src="progress.png"
+        alt="Gold Tesla with a 9,500 dollar price"
+      />
+    </section>
+  </main>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
