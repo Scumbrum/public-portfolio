@@ -6,4 +6,5 @@ var ACTIONS = [
   { side: 'BUY', asset: 'COIN', amount: 0.67, price: 152.66, date: '2026-08-03' },
   { side: 'BUY', asset: 'COIN', amount: 0.56, price: 177.76, date: '2026-09-01' },
   { side: 'BUY', asset: 'COIN', amount: 0.553, price: 180.38, date: '2026-10-07' },
+  { side: 'BUY', asset: 'COIN', amount: 0.68, price: 143, date: '2026-11-03' },
 ];

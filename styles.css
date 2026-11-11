@@ -333,6 +333,7 @@ th {
 @media (max-width: 720px) {
   .stats {
     width: 100%;
+    min-width: unset;
   }
 
   .stat {
