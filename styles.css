@@ -333,11 +333,11 @@ th {
 @media (max-width: 720px) {
   .stats {
     width: 100%;
-    min-width: unset;
   }
 
   .stat {
     flex: 1;
+    min-width: unset;
   }
 
   .action-list li {
